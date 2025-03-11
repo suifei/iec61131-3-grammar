@@ -1,16 +1,24 @@
-# Compiled class file
+# IEC61131-3 Grammar Project
+# =========================
+# 
+# ANTLR Generated Files
+*.tokens
+*.interp
 *.class
+*.java
+!pom.xml
+!*.g4
 
-# Log file
+# Compiled & Build Files
+*.class
 *.log
+target/
+build/
+bin/
+out/
+dist/
 
-# BlueJ files
-*.ctxt
-
-# Mobile Tools for Java (J2ME)
-.mtj.tmp/
-
-# Package Files #
+# Package Files
 *.jar
 *.war
 *.nar
@@ -19,6 +27,17 @@
 *.tar.gz
 *.rar
 
-# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
+# IDE files
+.idea/
+.vscode/
+*.iml
+.project
+.classpath
+.settings/
+
+# System & Temporary Files
+*.swp
+*~
+.DS_Store
 hs_err_pid*
 replay_pid*
