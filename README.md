@@ -38,8 +38,8 @@ https://github.com/suifei/iec61131-3-grammar
 # 生成Java解析器代码
 antlr4 -visitor IEC61131_3.g4
 
-# 编译生成的Java代码
-javac *.java
+# 查看toens
+antlr4-parse.exe .\IEC61131_3.g4 compilation_unit -tokens -tree -trace -gui
 ```
 
 ### 解析IEC61131-3代码

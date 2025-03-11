@@ -43,12 +43,29 @@ grammar IEC61131_3;
     // Synchronized error recovery points
     public void synchronize() {
         // Recover to nearest stable point in syntax tree
+        while (_input.LA(1) != Token.EOF) {
+            if (_input.LA(1) == ';') {
+                consume();
+                return;
+            }
+            consume();
+        }
     }
     
     // Robust error reporting with location information
     public void reportContextSensitiveError(String message, Token offendingToken) {
         // Report detailed error with context
+        String errorMessage = String.format(
+            "Error at line %d:%d - %s",
+            offendingToken.getLine(),
+            offendingToken.getCharPositionInLine(),
+            message
+        );
+        notifyErrorListeners(offendingToken, errorMessage, null);
     }
+    
+    // Symbol table for tracking declarations and references
+    private SymbolTable symbolTable = new SymbolTable();
     
     // Type compatibility checking
     private boolean areTypesCompatible(String type1, String type2) {
@@ -73,77 +90,6 @@ grammar IEC61131_3;
         // Check if value is valid for the enum type
         return true;
     }
-    
-    // Symbol table for tracking declarations and references
-    private SymbolTable symbolTable = new SymbolTable();
-    
-    // Record a symbol declaration
-    private void declareSymbol(String name, String type, ParserRuleContext context) {
-        // Add to symbol table with location information
-    }
-    
-    // Record a symbol reference
-    private void referenceSymbol(String name, ParserRuleContext context) {
-        // Add reference with location information
-    }
-    
-    // Resolve a reference to its declaration
-    private ParserRuleContext resolveReference(String name, ParserRuleContext context) {
-        // Look up in symbol table
-        return null;
-    }
-    
-    // PLC-specific diagnostic checks
-    private void checkCriticalVariableInitialization(VarDeclaration ctx) {
-        // Ensure safety-critical variables have proper initialization
-    }
-    
-    private void checkPotentialScanCycleOverruns(StatementList ctx) {
-        // Check for loops or operations that might cause cycle overruns
-    }
-    
-    private void checkPotentialRaceConditions(List<AccessPath> accessPaths) {
-        // Identify potential race conditions in multi-task environments
-    }
-    
-    private void checkAssignmentPatterns(AssignmentStatement ctx) {
-        // Check for common PLC programming errors in assignments
-    }
-    
-    private void checkPotentialDeadlocks(SfcNetwork ctx) {
-        // Analyze SFC networks for potential deadlocks
-    }
-    
-    private void checkEdgeDetectionUsage(EdgeDeclaration ctx) {
-        // Validate proper usage of edge detection in programs
-    }
-
-    // Type compatibility checking
-    private boolean areTypesCompatible(String type1, String type2) {
-        // Implement type compatibility rules based on IEC 61131-3
-        return true;
-    }
-    
-    // Variable scope validation
-    private boolean isVariableInScope(String varName, ParserRuleContext context) {
-        // Check if variable is accessible in current scope
-        return true;
-    }
-    
-    // Function call validation
-    private boolean validateFunctionCall(String funcName, List<ParserRuleContext> args) {
-        // Validate function call with argument count and types
-        return true;
-    }
-    
-    // Enumeration value validation
-    private boolean isValidEnumValue(String enumTypeName, String enumValue) {
-        // Check if value is valid for the enum type
-        return true;
-    }
-    
-    // Symbol table for tracking declarations and references
-    private SymbolTable symbolTable = new SymbolTable();
     
     // Record a symbol declaration
     private void declareSymbol(String name, String type, ParserRuleContext context) {
@@ -201,6 +147,21 @@ grammar IEC61131_3;
     // Enhanced error reporting for lexical errors
     public void reportLexicalError(String message, int startIndex, int stopIndex) {
         // Report detailed lexical error with suggestions for correction
+        String errorMessage = String.format(
+            "Lexical error at position %d-%d: %s",
+            startIndex,
+            stopIndex,
+            message
+        );
+        
+        // 获取错误上下文
+        String inputStream = this.getInputStream().toString();
+        int contextStart = Math.max(0, startIndex - 10);
+        int contextEnd = Math.min(inputStream.length(), stopIndex + 10);
+        String context = inputStream.substring(contextStart, contextEnd);
+        
+        System.err.println(errorMessage);
+        System.err.println("Context: ..." + context + "...");
     }
     
     // Industry-specific lexical helpers
@@ -210,6 +171,8 @@ grammar IEC61131_3;
     }
 }
 // ============================== COMPILATION UNIT ==============================
+
+options { caseInsensitive=true; }
 
 compilation_unit
     : pragma_directive* 
@@ -407,6 +370,43 @@ library_element_declaration
     | artifact_reference
     | vendor_specific_extension
     | export_declaration
+    | unit_declaration // CODESYS specific extension
+    ;
+    
+// --- CODESYS specific extensions ---
+unit_declaration
+    : 'UNIT' unit_name ';'
+      unit_interface_section?
+      unit_implementation_section?
+    ;
+
+unit_name
+    : IDENTIFIER
+    ;
+
+unit_interface_section
+    : 'INTERFACE'
+      unit_uses_section?
+      (function_declaration
+      | function_block_declaration
+      | data_type_declaration
+      | global_var_declarations)*
+      'END_INTERFACE'
+    ;
+
+unit_uses_section
+    : 'USES' unit_name_list ';'
+    ;
+
+unit_name_list
+    : unit_name (',' unit_name)*
+    ;
+
+unit_implementation_section
+    : 'IMPLEMENTATION'
+      (function_declaration
+      | function_block_declaration)*
+      'END_IMPLEMENTATION'
     ;
 
 // ============================== PROGRAM ==============================
@@ -544,7 +544,23 @@ instance_specific_init
 
 expression 
     : xor_expression (OR xor_expression)*
+    | comparison (AND comparison)*
+    | comparison (OR comparison)*
+    | comparison (XOR comparison)*
     ;
+
+array_index_expression
+    : expression (('+' | '-') expression)*
+    ;
+
+multi_element_variable
+    : variable_name ('[' expression ']')*
+    | variable_name '.' field_selector
+    ;
+
+// 移除array_index_expression规则，直接使用expression规则处理数组索引
+// 这样可以支持CoDeSys风格的复杂索引表达式，如out[out_start + i - 1]
+
 
 xor_expression 
     : and_expression (XOR and_expression)*
@@ -666,8 +682,8 @@ elementary_type_name
     : numeric_type_name 
     | date_type_name 
     | bit_string_type_name 
-    | STRING
-    | WSTRING
+    | STRING ('['(INTEGER|SIGNED_INTEGER)']')?
+    | WSTRING ('['(INTEGER|SIGNED_INTEGER)']')?
     ;
 
 numeric_type_name 
@@ -812,7 +828,7 @@ simple_specification
 function_block_declaration 
     : 'FUNCTION_BLOCK' derived_function_block_name 
       implements_interface? 
-      (io_var_declarations | other_var_declarations)* 
+      (io_var_declarations | other_var_declarations | method_declaration)* 
       function_block_body 
       'END_FUNCTION_BLOCK'
     ;
@@ -848,7 +864,7 @@ function_body
 function_declaration 
     : 'FUNCTION' derived_function_name ':' 
       (elementary_type_name | derived_type_name) 
-      (io_var_declarations | function_var_decls)* 
+      (io_var_declarations | function_var_decls | temp_var_decls)* 
       function_body 
       'END_FUNCTION'
     ;
@@ -880,6 +896,7 @@ var_init_decl
     | structured_var_init_decl 
     | fb_name_decl 
     | string_var_declaration
+    | var1_list ':' data_type_name (':=' expression)?  // CoDeSys style initialization
     ;
 
 var1_init_decl 
@@ -916,69 +933,29 @@ function_block_type_name
     ;
 
 standard_function_block_name
-    : // Bistable function blocks (flip-flop)
+    : // 标准功能块 - 基于IEC 61131-3第四版(2023)标准
+      
+      // 双稳态功能块 (SR/RS触发器)
       'SR' | 'RS'
       
-      // Edge detection function blocks
-    | 'R_TRIG' | 'F_TRIG' | 'R_EDGE' | 'F_EDGE' | 'DETECT_EDGE'
+      // 边沿检测功能块
+    | 'R_TRIG' | 'F_TRIG'
       
-      // Counter function blocks
-    | 'CTU' | 'CTD' | 'CTUD' | 'COUNTER' | 'UP_COUNTER' | 'DOWN_COUNTER' 
-    | 'UP_DOWN_COUNTER' | 'INC_COUNTER' | 'DEC_COUNTER'
+      // 计数器功能块
+    | 'CTU' | 'CTD' | 'CTUD'
       
-      // Timer function blocks
-    | 'TP' | 'TON' | 'TOF' | 'RTC' | 'PULSE_TIMER' | 'DELAY_TIMER' | 'RETENTIVE_TIMER'
-    | 'CYCLIC_TIMER' | 'CLOCK_PULSE' | 'WATCHDOG_TIMER' | 'INTERVAL_TIMER'
+      // 定时器功能块
+    | 'TP' | 'TON' | 'TOF' | 'RTC'
       
-      // Process control function blocks
-    | 'DERIVATIVE' | 'INTEGRAL' | 'PID' | 'RAMP' | 'HYSTERESIS' | 'PI_CONTROLLER'
-    | 'PD_CONTROLLER' | 'PID_CONTROLLER' | 'THREE_POINT_CONTROLLER' | 'STEP_CONTROLLER'
-    | 'FUZZY_CONTROLLER' | 'LEAD_LAG' | 'RATE_LIMITER' | 'RATIO_CONTROL'
-    | 'FEEDFORWARD_CONTROL' | 'DEADBAND' | 'SWITCH_POINT' | 'LIMITER'
-      
-      // Signal processing function blocks
-    | 'SEMA' | 'BITSHIFT' | 'COMPARATOR' | 'SCALE' | 'UNSCALE' | 'FILTER'
-    | 'MOVING_AVERAGE' | 'FFT' | 'SIGNAL_GEN' | 'CURVE_INTERPOLATION'
-    | 'SIGNAL_CONDITIONING' | 'THRESHOLD_DETECTOR' | 'PEAK_DETECTOR'
-    | 'ZERO_CROSSING' | 'TRIGGER_LEVEL' | 'PULSE_WIDTH_MODULATION'
-      
-      // Motor and motion control function blocks
-    | 'FB_CONTROLLER' | 'FB_MOTORCONTROL' | 'FB_VALVE' | 'FB_SERVO'
-    | 'FB_STEPPER' | 'FB_AXIS' | 'FB_DRIVE' | 'FB_ENCODER' | 'FB_CAM'
-    | 'POSITION_CONTROL' | 'SPEED_CONTROL' | 'TORQUE_CONTROL' | 'SYNC_CONTROL'
-    | 'PATH_PLANNING' | 'TRAJECTORY_GEN' | 'KINEMATICS' | 'HOME_CONTROL'
-      
-      // Communication function blocks
+      // 通信功能块 - 基于IEC 61131-5
     | 'SEND' | 'RECEIVE' | 'USEND' | 'URCV' | 'BSEND' | 'BRCV' | 'TSEND' | 'TRCV'
-    | 'MODBUS_MASTER' | 'MODBUS_SLAVE' | 'PROFIBUS_DP' | 'PROFINET_IO'
-    | 'ETHERNET_IP' | 'OPC_UA_CLIENT' | 'OPC_UA_SERVER' | 'MQTT_CLIENT'
-    | 'MQTT_SERVER' | 'HTTP_CLIENT' | 'HTTP_SERVER' | 'FTP_CLIENT' | 'FTP_SERVER'
-    | 'SERIAL_DEVICE' | 'FIELDBUS_MASTER' | 'FIELDBUS_SLAVE'
       
-      // Data handling function blocks
-    | 'DATA_BUFFER' | 'FIFO_BUFFER' | 'LIFO_BUFFER' | 'RING_BUFFER'
-    | 'DATA_STRUCT' | 'QUEUE' | 'STACK' | 'MEMORY_MANAGER' | 'DATA_LOGGER'
-    | 'DATA_ARCHIVER' | 'DATA_DISTRIBUTOR' | 'DATA_COLLECTOR' | 'REDUNDANCY'
-      
-      // Distributed control function blocks (IEC 61499)
-    | 'EVENT_INPUT' | 'EVENT_OUTPUT' | 'SERVICE_INTERFACE' | 'ADAPTER_INTERFACE'
-    | 'RESOURCE_MANAGER' | 'DEVICE_MANAGER' | 'SYSTEM_MANAGER' | 'EVENT_MANAGER'
-    | 'E_SPLIT' | 'E_MERGE' | 'E_REND' | 'E_SELECT' | 'E_SWITCH'
-      
-      // Error handling function blocks
-    | 'ERROR_HANDLER' | 'DIAGNOSTIC' | 'ALARM_HANDLER' | 'EVENT_LOGGER'
-    | 'EXCEPTION_HANDLER' | 'WATCHDOG' | 'ERROR_MONITOR' | 'SYSTEM_DIAGNOSTIC'
-    | 'ERROR_RECOVERY' | 'FAULT_MONITOR' | 'TRY_CATCH_BLOCK'
-      
-      // Security function blocks
-    | 'ACCESS_CONTROL' | 'AUTHENTICATION' | 'ENCRYPTION' | 'DECRYPTION'
-    | 'DIGITAL_SIGNATURE' | 'SECURITY_MONITOR' | 'CERTIFICATE_HANDLER'
-    
-      // Advanced and specialized function blocks
-    | 'RECIPE_MANAGER' | 'BATCH_MANAGER' | 'STATE_MACHINE' | 'SEQUENCE_CONTROL'
-    | 'PHASE_CONTROL' | 'EQUIPMENT_MODULE' | 'UNIT_PROCEDURE' | 'PROCEDURE'
-    | 'FB_SAFETY' | 'FB_REDUNDANCY' | 'FB_VISUALIZATION' | 'FB_DATABASE'
-    | 'FB_REPORT' | 'FB_AUDIT_TRAIL' | 'FB_ENERGY_MANAGEMENT'
+      // 扩展功能块 - 常见但非标准
+      // 这些是常见实现但不是IEC 61131-3标准的一部分
+    | 'DERIVATIVE' | 'INTEGRAL' | 'PID'
+    | 'SEMA' | 'SCALE' | 'UNSCALE'
+    | 'ALARM_HANDLER' | 'DIAGNOSTIC'
+    | 'HYSTERESIS' | 'LIMITER' | 'RAMP'
     ;
 
 derived_function_block_name 
@@ -1007,6 +984,11 @@ temp_var_decl
     | array_var_declaration 
     | structured_var_declaration 
     | string_var_declaration
+    | single_var_declaration
+    ;
+
+single_var_declaration
+    : IDENTIFIER ':' (simple_specification | subrange_specification | enumerated_specification)
     ;
 
 var1_declaration 
@@ -1185,10 +1167,14 @@ array_spec_init
 array_specification 
     : array_type_name 
     | 'ARRAY' '[' subrange (',' subrange)* ']' 'OF' non_generic_type_name
+    | 'ARRAY' '[' ']' 'OF' non_generic_type_name // 支持空数组声明
+    | 'ARRAY' '[' DOUBLEDOT ']' 'OF' non_generic_type_name // 明确支持可变长度数组声明 ARRAY[..]
     ;
+
 
 array_initialization
     : '[' array_initial_elements (',' array_initial_elements)* ']'
+    | '[' expression (',' expression)* ']'  // CoDeSys style array initialization
     ;
 
 array_initial_elements 
@@ -1272,74 +1258,48 @@ function_name
     ;
 
 standard_function_name 
-    : // Bit string functions
-      'SHL' | 'SHR' | 'ROR' | 'ROL' | 'AND' | 'OR' | 'XOR' | 'NOT'
-      | 'BIT_TST' | 'BIT_SET' | 'BIT_CLR' | 'BIT_TOG'
-      | 'BCD_TO_BIN' | 'BIN_TO_BCD' | 'BYTE_TO_WORD' | 'WORD_TO_BYTE'
-      | 'WORD_TO_DWORD' | 'DWORD_TO_WORD' | 'DWORD_TO_LWORD' | 'LWORD_TO_DWORD'
+    : // 标准函数 - 基于IEC 61131-3第四版(2023)标准
       
-      // Numeric functions
+      // 位字符串函数
+      'SHL' | 'SHR' | 'ROL' | 'ROR' | 'AND' | 'OR' | 'XOR' | 'NOT'
+      
+      // 数值函数
     | 'ABS' | 'SQRT' | 'LN' | 'LOG' | 'EXP' | 'SIN' | 'COS' | 'TAN'
     | 'ASIN' | 'ACOS' | 'ATAN' | 'ATAN2' | 'ADD' | 'MUL' | 'SUB' | 'DIV' | 'MOD'
-    | 'EXPT' | 'MOVE' | 'CEIL' | 'FLOOR' | 'ROUND' | 'TRUNC'
-    | 'SINH' | 'COSH' | 'TANH' | 'ASINH' | 'ACOSH' | 'ATANH'
-    | 'FRACT' | 'LOGE' | 'LOG10' | 'RANDOM' | 'POW' | 'IPOW'
+    | 'EXPT' | 'MOVE' | 'TRUNC'
       
-      // Comparison functions
+      // 比较函数
     | 'GT' | 'GE' | 'EQ' | 'LE' | 'LT' | 'NE'
-    | 'CMP' | 'IN_RANGE' | 'OUT_RANGE' | 'EQUAL' | 'NOT_EQUAL'
+    | 'MAX' | 'MIN' | 'LIMIT' | 'MUX' | 'SEL'
       
-      // String functions
+      // 字符串函数
     | 'LEN' | 'LEFT' | 'RIGHT' | 'MID' | 'CONCAT' | 'INSERT' | 'DELETE' | 'REPLACE'
-    | 'FIND' | 'WLEN' | 'WLEFT' | 'WRIGHT' | 'WMID' | 'WCONCAT' | 'WINSERT' | 'WDELETE' | 'WREPLACE'
-    | 'WFIND' | 'CHAR_TO_WCHAR' | 'WCHAR_TO_CHAR' | 'LOWER_CASE' | 'UPPER_CASE'
-    | 'STRING_TO_WSTRING' | 'WSTRING_TO_STRING' | 'TRIM' | 'SUBSTRING'
+    | 'FIND'
       
-      // Time/date functions
+      // 宽字符串函数
+    | 'WLEN' | 'WLEFT' | 'WRIGHT' | 'WMID' | 'WCONCAT' | 'WINSERT' | 'WDELETE' | 'WREPLACE'
+    | 'WFIND'
+      
+      // 时间/日期函数
     | 'ADD_TIME' | 'SUB_TIME' | 'MULTIME' | 'DIVTIME'
     | 'ADD_TOD_TIME' | 'SUB_TOD_TIME' | 'ADD_DT_TIME' | 'SUB_DT_TIME'
-    | 'CONCAT_DATE_TOD' | 'TIME_TO_STRING' | 'STRING_TO_TIME'
-    | 'DATE_TO_STRING' | 'STRING_TO_DATE' | 'TOD_TO_STRING' | 'STRING_TO_TOD'
-    | 'DT_TO_STRING' | 'STRING_TO_DT' | 'CLOCK' | 'CURRENT_DATE' | 'CURRENT_TIME'
-    | 'CURRENT_DATETIME' | 'ELAPSED_TIME'
+    | 'CONCAT_DATE_TOD'
       
-      // Type conversion functions
-    | 'TRUNC' | 'REAL_TO_INT' | 'REAL_TO_UINT' | 'INT_TO_REAL' | 'UINT_TO_REAL'
-    | 'BOOL_TO_INT' | 'INT_TO_BOOL' | 'TIME_TO_INT' | 'INT_TO_TIME'
-    | 'BCD_TO_INT' | 'INT_TO_BCD' | 'REAL_TO_STRING' | 'STRING_TO_REAL'
-    | 'INT_TO_STRING' | 'STRING_TO_INT' | 'BYTE_TO_STRING' | 'STRING_TO_BYTE'
-    | 'WORD_TO_STRING' | 'STRING_TO_WORD' | 'DWORD_TO_STRING' | 'STRING_TO_DWORD'
-    | 'LWORD_TO_STRING' | 'STRING_TO_LWORD' | 'TIME_TO_STRING' | 'STRING_TO_TIME'
-    | 'TOD_TO_STRING' | 'STRING_TO_TOD' | 'DATE_TO_STRING' | 'STRING_TO_DATE'
-    | 'DT_TO_STRING' | 'STRING_TO_DT' | 'TO_BCD' | 'FROM_BCD'
+      // 类型转换函数
+    | 'TRUNC'
+      
+      // 标准类型转换函数
     | 'TO_BOOL' | 'TO_BYTE' | 'TO_WORD' | 'TO_DWORD' | 'TO_LWORD'
     | 'TO_SINT' | 'TO_INT' | 'TO_DINT' | 'TO_LINT' | 'TO_USINT' | 'TO_UINT' | 'TO_UDINT' | 'TO_ULINT'
     | 'TO_REAL' | 'TO_LREAL' | 'TO_STRING' | 'TO_WSTRING' | 'TO_TIME' | 'TO_DATE' | 'TO_TOD' | 'TO_DT'
       
-      // Selection and comparison functions
-    | 'SEL' | 'MAX' | 'MIN' | 'LIMIT' | 'MUX'
-    | 'DECODE' | 'ENCODE' | 'BIT_COUNT' | 'PARITY'
-      
-      // Buffer handling functions
-    | 'FIFO' | 'LIFO' | 'MEMCPY' | 'MEMMOVE' | 'MEMSET' | 'MEMCMP'
-    | 'BUFFER_GET' | 'BUFFER_PUT' | 'QUEUE_GET' | 'QUEUE_PUT'
-      
-      // Program control functions
-    | 'TASK_CONTROL' | 'TASK_RESTART' | 'TASK_STOP' | 'TASK_STATUS'
-    | 'PROGRAM_CONTROL' | 'PROGRAM_RESTART' | 'PROGRAM_STOP' | 'PROGRAM_STATUS'
-      
-      // Array and matrix functions
-    | 'ARRAY_SIZE' | 'ARRAY_DIMENSION' | 'ARRAY_RESHAPE' | 'ARRAY_CONCATENATE'
-    | 'MATRIX_ADD' | 'MATRIX_SUB' | 'MATRIX_MUL' | 'MATRIX_TRANSPOSE'
-    | 'MATRIX_DETERMINANT' | 'MATRIX_INVERSE'
-      
-      // File handling functions
-    | 'FILE_OPEN' | 'FILE_CLOSE' | 'FILE_READ' | 'FILE_WRITE' | 'FILE_POSITION'
-    | 'FILE_SEEK' | 'FILE_SIZE' | 'FILE_DELETE' | 'FILE_RENAME' | 'FILE_COPY'
-      
-      // Error handling functions
-    | 'GET_ERROR' | 'CLEAR_ERROR' | 'SET_ERROR' | 'CHECK_ERROR'
-    | 'ERROR_TO_STRING' | 'TRY_CATCH' | 'RAISE_ERROR'
+      // 扩展函数 - 常见但非标准
+      // 这些是常见实现但不是IEC 61131-3标准的核心部分
+    | 'CEIL' | 'FLOOR' | 'ROUND'
+    | 'SINH' | 'COSH' | 'TANH' | 'ASINH' | 'ACOSH' | 'ATANH'
+    | 'TRIM' | 'SUBSTRING' | 'LOWER_CASE' | 'UPPER_CASE'
+    | 'STRING_TO_WSTRING' | 'WSTRING_TO_STRING'
+    | 'BIT_COUNT' | 'PARITY'
     ;
 
 derived_function_name 
@@ -1360,13 +1320,17 @@ variable_name
 variable 
     : direct_variable 
     | symbolic_variable
+    | variable '[' expression ']' // 直接支持数组索引表达式
+    | variable '.' field_selector // 直接支持字段访问
     ;
 
 symbolic_variable 
     : multi_element_variable  
     ; 
 
-multi_element_variable 
+// 使用已有的multi_element_variable规则，但增强其功能以支持CoDeSys风格的数组访问
+// 原始定义在第552-556行附近
+symbolic_variable_extended 
     : multi_element_variable LBRACK expression (',' expression)* RBRACK
     | multi_element_variable '.' field_selector
     | variable_name
@@ -1443,7 +1407,15 @@ case_list_element
     ;
 
 subrange 
-    : SIGNED_INTEGER DOUBLEDOT SIGNED_INTEGER
+    : DOUBLEDOT // 支持可变长度数组 [..]
+    | variable_name DOUBLEDOT // 支持下界为变量 [i..]
+    | DOUBLEDOT variable_name // 支持上界为变量 [..i]
+    | variable_name DOUBLEDOT variable_name // 支持范围为变量 [i..j]
+    | SIGNED_INTEGER DOUBLEDOT // 支持下界为常量 [0..]
+    | DOUBLEDOT SIGNED_INTEGER // 支持上界为常量 [..10]
+    | SIGNED_INTEGER DOUBLEDOT SIGNED_INTEGER // 支持固定范围 [0..10]
+    | SIGNED_INTEGER DOUBLEDOT variable_name // 支持下界为常量上界为变量 [0..i]
+    | variable_name DOUBLEDOT SIGNED_INTEGER // 支持下界为变量上界为常量 [i..10]
     ;
 
 iteration_statement 
@@ -1999,11 +1971,14 @@ return_type
 // Support for async/await pattern
 async_statement
     : 'ASYNC' statement_list 'END_ASYNC'
+    | 'ASYNC' '(' expression ')' statement
     ;
 
 await_expression
     : 'AWAIT' expression
+    | 'AWAIT' '(' expression ')'
     ;
+
 
 // Support for streams and reactive programming
 stream_declaration
@@ -2076,29 +2051,162 @@ MILLISECONDS
     | INTEGER ('ms')
     ;
     
+// --- Fragment Helpers for Case Insensitivity ---
+
+fragment A: 'a';
+fragment B: 'b';
+fragment C: 'c';
+fragment D: 'd';
+fragment E: 'e';
+fragment F: 'f';
+fragment G: 'g';
+fragment H: 'h';
+fragment I: 'i';
+fragment J: 'j';
+fragment K: 'k';
+fragment L: 'l';
+fragment M: 'm';
+fragment N: 'n';
+fragment O: 'o';
+fragment P: 'p';
+fragment Q: 'q';
+fragment R: 'r';
+fragment S: 's';
+fragment T: 't';
+fragment U: 'u';
+fragment V: 'v';
+fragment W: 'w';
+fragment X: 'x';
+fragment Y: 'y';
+fragment Z: 'z';
+
 // --- Datatypes ---
 
-SINT : 'SINT' ;
-INT : 'INT' ;
-DINT : 'DINT' ;
-LINT : 'LINT' ;
-USINT : 'USINT' ;
-UINT : 'UINT' ;
-UDINT : 'UDINT' ;
-ULINT : 'ULINT' ;
-REAL : 'REAL' ;
-LREAL : 'LREAL' ;
-TIME : ('TIME' | 'T') ;
-DATE : ('DATE' | 'D') ;
-DATETIME : ('DATE_AND_TIME' | 'DT') ;
-TIMEOFDAY : ('TIME_OF_DAY' | 'TOD') ;
-BOOL : 'BOOL' ;    
+SINT : S I N T ;
+INT : I N T ;
+DINT : D I N T ;
+LINT : L I N T ;
+USINT : U S I N T ;
+UINT : U I N T ;
+UDINT : U D I N T ;
+ULINT : U L I N T ;
+REAL : R E A L ;
+LREAL : L R E A L ;
+TIME : (T I M E | T) ;
+DATE : (D A T E | D) ;
+DATETIME : (D A T E '_' A N D '_' T I M E | D T) ;
+TIMEOFDAY : (T I M E '_' O F '_' D A Y | T O D) ;
+BOOL : B O O L ;
+
+// --- Keywords ---
+VAR : V A R ;
+VAR_INPUT : V A R '_' I N P U T ;
+VAR_OUTPUT : V A R '_' O U T P U T ;
+VAR_IN_OUT : V A R '_' I N '_' O U T ;
+VAR_TEMP : V A R '_' T E M P ;
+VAR_GLOBAL : V A R '_' G L O B A L ;
+VAR_ACCESS : V A R '_' A C C E S S ;
+VAR_EXTERNAL : V A R '_' E X T E R N A L ;
+VAR_CONFIG : V A R '_' C O N F I G ;
+
+END_VAR : E N D '_' V A R ;
+
+CONFIGURATION : C O N F I G U R A T I O N ;
+END_CONFIGURATION : E N D '_' C O N F I G U R A T I O N ;
+
+RESOURCE : R E S O U R C E ;
+END_RESOURCE : E N D '_' R E S O U R C E ;
+
+PROGRAM : P R O G R A M ;
+END_PROGRAM : E N D '_' P R O G R A M ;
+
+FUNCTION : F U N C T I O N ;
+END_FUNCTION : E N D '_' F U N C T I O N ;
+
+FUNCTION_BLOCK : F U N C T I O N '_' B L O C K ;
+END_FUNCTION_BLOCK : E N D '_' F U N C T I O N '_' B L O C K ;
+
+STRUCT : S T R U C T ;
+END_STRUCT : E N D '_' S T R U C T ;
+
+TYPE : T Y P E ;
+END_TYPE : E N D '_' T Y P E ;
+
+IF : I F ;
+THEN : T H E N ;
+ELSIF : E L S I F ;
+ELSE : E L S E ;
+END_IF : E N D '_' I F ;
+
+CASE : C A S E ;
+OF : O F ;
+END_CASE : E N D '_' C A S E ;
+
+FOR : F O R ;
+TO : T O ;
+BY : B Y ;
+DO : D O ;
+END_FOR : E N D '_' F O R ;
+
+WHILE : W H I L E ;
+END_WHILE : E N D '_' W H I L E ;
+
+REPEAT : R E P E A T ;
+UNTIL : U N T I L ;
+END_REPEAT : E N D '_' R E P E A T ;
+
+RETURN : R E T U R N ;
+EXIT : E X I T ;
+CONTINUE : C O N T I N U E ;
+
+ARRAY : A R R A Y ;
+AT : A T ;
+CONSTANT : C O N S T A N T ;
+RETAIN : R E T A I N ;
+NON_RETAIN : N O N '_' R E T A I N ;
+PERSISTENT : P E R S I S T E N T ;
+
+// --- OOP Extensions ---
+INTERFACE : I N T E R F A C E ;
+END_INTERFACE : E N D '_' I N T E R F A C E ;
+METHOD : M E T H O D ;
+END_METHOD : E N D '_' M E T H O D ;
+CLASS : C L A S S ;
+END_CLASS : E N D '_' C L A S S ;
+EXTENDS : E X T E N D S ;
+IMPLEMENTS : I M P L E M E N T S ;
+SUPER : S U P E R ;
+THIS : T H I S ;
+
+// --- CODESYS Extensions ---
+UNIT : U N I T ;
+IMPLEMENTATION : I M P L E M E N T A T I O N ;
+END_IMPLEMENTATION : E N D '_' I M P L E M E N T A T I O N ;
+USES : U S E S ;
+
+// --- Access Modifiers ---
+PUBLIC : P U B L I C ;
+PRIVATE : P R I V A T E ;
+PROTECTED : P R O T E C T E D ;
+INTERNAL : I N T E R N A L ;
+
+// --- Other Keywords ---
+NAMESPACE : N A M E S P A C E ;
+END_NAMESPACE : E N D '_' N A M E S P A C E ;
+USING : U S I N G ;
+POINTER : P O I N T E R ;
+REF : R E F ;
+REF_TO : R E F '_' T O ;
+NULL : N U L L ;
+TRUE : T R U E ;
+FALSE : F A L S E ;
 
 BITSTRING
     : 'BYTE' 
     | 'WORD' 
     | 'DWORD' 
     | 'LWORD'
+    | 'BIT'
     ;
     
 GENERIC
@@ -2119,10 +2227,10 @@ WSTRING : 'WSTRING' ;
     
 // --- Logic Operators ---
 
-OR : 'OR' ;
-XOR : 'XOR' ;
-AND : '&' | 'AND' ;
-NOT : 'NOT' ;
+OR : O R ;
+XOR : X O R ;
+AND : '&' | A N D ;
+NOT : N O T ;
 
 // --- Comparison Operators ---
 EQU : '=' ;
@@ -2150,9 +2258,9 @@ DOT : '.' ;
 DOUBLEDOT : '..' ;
 
 BOOLEAN
-    : BOOL '#' Bit
-    | 'TRUE'
+    : 'TRUE'
     | 'FALSE'
+    | BOOL '#' Bit
     ;
     
 // --- Numeric Literals ---
@@ -2166,7 +2274,7 @@ SIGNED_INTEGER
     ;
 
 EXPONENT 
-    : ('E' | 'e')('+'|'-')? INTEGER
+    : 'e'('+'|'-')? INTEGER
     ;
     
 INTEGER
@@ -2255,7 +2363,7 @@ SbStringCharacter
 
 fragment
 EscapeSequence
-    : '$' [$LlNnPpRrTt]
+    : '$' [$lnprt]
     ;
 
 fragment
@@ -2279,11 +2387,12 @@ LetterOrDigitOrUnderscore
 
 fragment 
 Letter
-    : [a-zA-Z]
+    : [a-z]
     ;
 
+
 fragment 
-Digit 
+Digit
     : [0-9]
     ;
 
@@ -2300,8 +2409,9 @@ Bit
 fragment 
 HexDigit
     : Digit 
-    | [A-Fa-f]
+    | [a-f]
     ;
+
 
 // --- Whitespace and Comments ---
     
