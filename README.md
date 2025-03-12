@@ -39,7 +39,7 @@ https://github.com/suifei/iec61131-3-grammar
 antlr4 -visitor IEC61131_3.g4
 
 # 查看toens
-antlr4-parse.exe .\IEC61131_3.g4 compilation_unit -tokens -tree -trace -gui
+clear && antlr4-parse.exe ./IEC61131_3.g4 compilation_unit -tokens -tree -trace -gui
 ```
 
 ### 解析IEC61131-3代码

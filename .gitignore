@@ -41,3 +41,5 @@ dist/
 .DS_Store
 hs_err_pid*
 replay_pid*
+
+test.g4

@@ -19,6 +19,8 @@ INTERFACE
 	
 	FUNCTION PAD_STRING_LEFT;
 	FUNCTION PAD_STRING_RIGHT;
+
+	function add_string;
 	
 	FUNCTION ENCODE_STRING;
 	FUNCTION DECODE_STRING;
@@ -288,7 +290,11 @@ IMPLEMENTATION
 		
 		PAD_STRING_RIGHT := out;
 	END_FUNCTION
-	
+
+	function add_string(in1, in2 : string) : string;
+	begin
+		add_string := CONCAT(in1, in2);
+	end;
 	
 	// Encodes given string into given BYTE array using given encoding.
 	// If target array is too small, given string will be cut. If target array is too large, remaining bytes will be set to NULL (0).

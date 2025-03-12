@@ -28,6 +28,8 @@
 
 grammar IEC61131_3;
 
+options { caseInsensitive = true; }
+
 @parser::members {
     // Custom error recovery strategy
     protected void reportError(Token token, String message) {
@@ -40,7 +42,7 @@ grammar IEC61131_3;
         return true; // Always report errors for industrial reliability
     }
     
-    // Synchronized error recovery points
+    // Enhanced synchronized error recovery points
     public void synchronize() {
         // Recover to nearest stable point in syntax tree
         while (_input.LA(1) != Token.EOF) {
@@ -48,6 +50,21 @@ grammar IEC61131_3;
                 consume();
                 return;
             }
+            
+            // Add recovery at END_* keywords
+            String tokenText = _input.LT(1).getText().toUpperCase();
+            if (tokenText.startsWith("END_")) {
+                consume();
+                return;
+            }
+            
+            // Also recover at major statement boundaries
+            if (tokenText.equals("IF") || tokenText.equals("ELSE") || 
+                tokenText.equals("CASE") || tokenText.equals("FOR") ||
+                tokenText.equals("WHILE") || tokenText.equals("REPEAT")) {
+                return;
+            }
+            
             consume();
         }
     }
@@ -67,18 +84,79 @@ grammar IEC61131_3;
     // Symbol table for tracking declarations and references
     private SymbolTable symbolTable = new SymbolTable();
     
-    // Type compatibility checking
+    
+    // Type compatibility checking - improved implementation
     private boolean areTypesCompatible(String type1, String type2) {
-        // Implement type compatibility rules based on IEC 61131-3
-        return true;
+        // Exact matches are always compatible
+        if (type1.equals(type2)) return true;
+        
+        // Numeric type compatibility rules
+        Map<String, Integer> numericHierarchy = new HashMap<>();
+        numericHierarchy.put("SINT", 1);
+        numericHierarchy.put("INT", 2);
+        numericHierarchy.put("DINT", 3);
+        numericHierarchy.put("LINT", 4);
+        numericHierarchy.put("REAL", 5);
+        numericHierarchy.put("LREAL", 6);
+        
+        // Smaller types can be assigned to larger types
+        if (numericHierarchy.containsKey(type1) && numericHierarchy.containsKey(type2)) {
+            return numericHierarchy.get(type1) <= numericHierarchy.get(type2);
+        }
+        
+        // String types
+        if (type1.equals("STRING") && type2.equals("STRING")) return true;
+        if (type1.equals("STRING") && type2.equals("WSTRING")) return true;
+        
+        // Bit string compatibility
+        Map<String, Integer> bitHierarchy = new HashMap<>();
+        bitHierarchy.put("BOOL", 1);
+        bitHierarchy.put("BYTE", 2);
+        bitHierarchy.put("WORD", 3);
+        bitHierarchy.put("DWORD", 4);
+        bitHierarchy.put("LWORD", 5);
+        
+        if (bitHierarchy.containsKey(type1) && bitHierarchy.containsKey(type2)) {
+            return bitHierarchy.get(type1) <= bitHierarchy.get(type2);
+        }
+        
+        // For other types, use strict compatibility
+        return false;
     }
     
-    // Variable scope validation
+    // Variable scope validation - improved implementation
     private boolean isVariableInScope(String varName, ParserRuleContext context) {
-        // Check if variable is accessible in current scope
-        return true;
+        // Walk up the parse tree to check each scope
+        ParserRuleContext current = context;
+        while (current != null) {
+            // Check if the current context is a scope boundary
+            if (current instanceof Function_declarationContext ||
+                current instanceof Function_block_declarationContext ||
+                current instanceof Program_declarationContext) {
+                
+                // Check if variable is declared in this scope
+                List<VarDeclaration> declarations = getVarDeclarationsInScope(current);
+                for (VarDeclaration decl : declarations) {
+                    if (decl.name.equals(varName)) {
+                        return true;
+                    }
+                }
+            }
+            
+            // Move up to parent context
+            current = current.getParent();
+        }
+        
+        // Check global scope
+        List<VarDeclaration> globals = getGlobalVarDeclarations();
+        for (VarDeclaration decl : globals) {
+            if (decl.name.equals(varName)) {
+                return true;
+            }
+        }
+        
+        return false;
     }
-    
     // Function call validation
     private boolean validateFunctionCall(String funcName, List<ParserRuleContext> args) {
         // Validate function call with argument count and types
@@ -172,7 +250,6 @@ grammar IEC61131_3;
 }
 // ============================== COMPILATION UNIT ==============================
 
-options { caseInsensitive=true; }
 
 compilation_unit
     : pragma_directive* 
@@ -544,9 +621,7 @@ instance_specific_init
 
 expression 
     : xor_expression (OR xor_expression)*
-    | comparison (AND comparison)*
-    | comparison (OR comparison)*
-    | comparison (XOR comparison)*
+    | add_expression
     ;
 
 array_index_expression
@@ -556,11 +631,8 @@ array_index_expression
 multi_element_variable
     : variable_name ('[' expression ']')*
     | variable_name '.' field_selector
+    | variable_name
     ;
-
-// 移除array_index_expression规则，直接使用expression规则处理数组索引
-// 这样可以支持CoDeSys风格的复杂索引表达式，如out[out_start + i - 1]
-
 
 xor_expression 
     : and_expression (XOR and_expression)*
@@ -570,20 +642,39 @@ and_expression
     : comparison (AND comparison)*
     ;
 
+// Left-factored rule
 comparison 
     : equ_expression ((EQU | NEQU) equ_expression)*
+    | basic_comparison (AND basic_comparison)*
+    ;
+
+basic_comparison
+    : variable (EQU | NEQU | LT | GT | LE | GE) expression
+    | IDENTIFIER EQU IDENTIFIER
+    ;
+
+comparison_term
+    : IDENTIFIER ('=' IDENTIFIER | '>' expression)
+    | variable_name '=' variable_name
+    | variable '[' expression ']' '>' expression
+    ;
+
+comparison_operator 
+    : EQU | NEQU | LT | GT | LE | GE
     ;
 
 equ_expression 
     : add_expression (comparison_operator add_expression)*
     ;
 
-comparison_operator 
-    : LT | GT | LE | GE
-    ;
-
 add_expression 
     : term (add_operator term)*
+    | term '+' variable_name // 支持 out_start+i 形式的表达式
+    | term '-' variable_name // 支持 out_start-i 形式的表达式
+    | variable_name '+' term // 支持 i+1 形式的表达式
+    | variable_name '-' term // 支持 i-1 形式的表达式
+    | variable_name '+' variable_name // 支持 i+j 形式的表达式
+    | variable_name '-' variable_name // 支持 i-j 形式的表达式
     ;
 
 add_operator 
@@ -618,6 +709,7 @@ primary_expression
     | function_name LPAR (param_assignment (',' param_assignment)*)? RPAR
     | await_expression
     | lambda_expression
+    | IDENTIFIER // Add this as first alternative for better recognition
     ;
 
 constant 
@@ -842,12 +934,24 @@ other_var_declarations
     | var_declarations 
     | retentive_var_declarations 
     | non_retentive_var_declarations 
+    | persistent_var_declarations  
     | temp_var_decls 
     | incompl_located_var_declarations
     ;
 
+// Updated rules:
 temp_var_decls 
-    : 'VAR_TEMP' temp_var_decl ';' (temp_var_decl ';')* 'END_VAR'
+    : 'VAR_TEMP' 
+      temp_var_decl ';' (temp_var_decl ';')* 
+      'END_VAR'
+    ;
+
+temp_var_decl 
+    : var1_declaration 
+    | array_var_declaration 
+    | structured_var_declaration 
+    | string_var_declaration
+    | single_var_declaration  // 处理简单的 IDENTIFIER : type 模式
     ;
 
 function_block_body 
@@ -927,6 +1031,12 @@ fb_name
     : IDENTIFIER
     ;
 
+persistent_var_declarations 
+    : 'VAR' 'PERSISTENT' 
+      var_init_decl ';' (var_init_decl ';')* 
+      'END_VAR'
+    ;
+
 function_block_type_name 
     : standard_function_block_name 
     | derived_function_block_name
@@ -956,6 +1066,13 @@ standard_function_block_name
     | 'SEMA' | 'SCALE' | 'UNSCALE'
     | 'ALARM_HANDLER' | 'DIAGNOSTIC'
     | 'HYSTERESIS' | 'LIMITER' | 'RAMP'
+    // Extension point for vendor-specific blocks
+    | vendor_function_block_name
+    ;
+
+// Add a new rule for vendor blocks
+vendor_function_block_name
+    : 'VENDOR_' IDENTIFIER
     ;
 
 derived_function_block_name 
@@ -977,14 +1094,6 @@ input_output_declarations
 var_declaration 
     : temp_var_decl 
     | fb_name_decl
-    ;
-
-temp_var_decl 
-    : var1_declaration 
-    | array_var_declaration 
-    | structured_var_declaration 
-    | string_var_declaration
-    | single_var_declaration
     ;
 
 single_var_declaration
@@ -1320,20 +1429,14 @@ variable_name
 variable 
     : direct_variable 
     | symbolic_variable
-    | variable '[' expression ']' // 直接支持数组索引表达式
-    | variable '.' field_selector // 直接支持字段访问
+    | variable_name '[' expression ']' // Direct array access
+    | variable_name '.' field_selector  // Direct field access
     ;
-
+    
 symbolic_variable 
-    : multi_element_variable  
-    ; 
-
-// 使用已有的multi_element_variable规则，但增强其功能以支持CoDeSys风格的数组访问
-// 原始定义在第552-556行附近
-symbolic_variable_extended 
-    : multi_element_variable LBRACK expression (',' expression)* RBRACK
-    | multi_element_variable '.' field_selector
-    | variable_name
+    : variable_name 
+    | variable_name ('[' expression ']')* 
+    | variable_name '.' field_selector ('.' field_selector)*
     ;
 
 field_selector 
@@ -1407,15 +1510,19 @@ case_list_element
     ;
 
 subrange 
-    : DOUBLEDOT // 支持可变长度数组 [..]
-    | variable_name DOUBLEDOT // 支持下界为变量 [i..]
-    | DOUBLEDOT variable_name // 支持上界为变量 [..i]
-    | variable_name DOUBLEDOT variable_name // 支持范围为变量 [i..j]
-    | SIGNED_INTEGER DOUBLEDOT // 支持下界为常量 [0..]
-    | DOUBLEDOT SIGNED_INTEGER // 支持上界为常量 [..10]
-    | SIGNED_INTEGER DOUBLEDOT SIGNED_INTEGER // 支持固定范围 [0..10]
-    | SIGNED_INTEGER DOUBLEDOT variable_name // 支持下界为常量上界为变量 [0..i]
-    | variable_name DOUBLEDOT SIGNED_INTEGER // 支持下界为变量上界为常量 [i..10]
+    : left_bound DOUBLEDOT right_bound
+    ;
+
+left_bound
+    : /* empty */
+    | variable_name
+    | SIGNED_INTEGER
+    ;
+
+right_bound
+    : /* empty */
+    | variable_name
+    | SIGNED_INTEGER
     ;
 
 iteration_statement 
@@ -1430,8 +1537,9 @@ for_statement
     ;
 
 control_variable 
-    : IDENTIFIER
+    : variable_name
     ;
+
 
 for_list 
     : expression 'TO' expression ('BY' expression)?
@@ -1490,6 +1598,7 @@ param_direction
     : 'VAR_INPUT'
     | 'VAR_OUTPUT'
     | 'VAR_IN_OUT'
+    | 'VAR_TEMP'
     ;
 
 interface_property_declaration 
@@ -2108,6 +2217,7 @@ VAR_GLOBAL : V A R '_' G L O B A L ;
 VAR_ACCESS : V A R '_' A C C E S S ;
 VAR_EXTERNAL : V A R '_' E X T E R N A L ;
 VAR_CONFIG : V A R '_' C O N F I G ;
+VAR_PERSISTENT : V A R '_' P E R S I S T E N T ;
 
 END_VAR : E N D '_' V A R ;
 
@@ -2229,7 +2339,7 @@ WSTRING : 'WSTRING' ;
 
 OR : O R ;
 XOR : X O R ;
-AND : '&' | A N D ;
+AND : '&' | AND_TEXT ;
 NOT : N O T ;
 
 // --- Comparison Operators ---
@@ -2296,7 +2406,7 @@ HEX_INTEGER
 // --- Variable Specifiers ---
 
 DIRECT_VAR_SPECIFIER
-    : LOCATION_PREFIX SIZE_PREFIX? INTEGER (DOT INTEGER)*
+    : LOCATION_PREFIX SIZE_PREFIX? ADDR_PART
     ;
 
 LOCATION_PREFIX
@@ -2335,6 +2445,12 @@ DB_STRING_LITERAL
 
 SB_STRING_LITERAL
     : '\'' SbStringCharacters? '\''
+    ;
+
+fragment AND_TEXT : A N D ;
+
+fragment ADDR_PART
+    : INTEGER (DOT INTEGER)*
     ;
 
 fragment
